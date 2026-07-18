@@ -943,6 +943,15 @@ try {
   } else {
     fail('local-parser should not reject a fixed-script entry over an unused company placeholder');
   }
+
+  if (localParser.detect({
+    name: 'LinkedIn',
+    parser: { command: 'node', script: 'scan.mjs', args: ['--entry-json', '{entry_json}'] },
+  })?.url) {
+    pass('local-parser accepts the {entry_json} placeholder for reusable board parsers');
+  } else {
+    fail('local-parser should accept the {entry_json} placeholder');
+  }
 } catch (e) {
   fail(`local-parser hardening tests crashed: ${e.message}`);
 }
@@ -1029,6 +1038,7 @@ try {
   const emptyKeywordPath = join(tmp, 'empty-keyword.yml');
   const duplicateCompanyPath = join(tmp, 'duplicate-company.yml');
   const badContentFilterPath = join(tmp, 'bad-content-filter.yml');
+  const parserBoardPath = join(tmp, 'parser-board.yml');
 
   writeFileSync(validPath, `
 title_filter:
@@ -1078,6 +1088,18 @@ tracked_companies:
     careers_url: "https://jobs.lever.co/acme"
 `, 'utf-8');
 
+  writeFileSync(parserBoardPath, `
+title_filter:
+  positive: ["AI"]
+job_boards:
+  - name: "LinkedIn"
+    provider: "local-parser"
+    parser:
+      command: "node"
+      script: "scan.mjs"
+      args: ["--entry-json", "{entry_json}"]
+`, 'utf-8');
+
   const validResult = run(NODE, ['validate-portals.mjs', '--file', validPath]);
   if (validResult !== null && validResult.includes('0 errors')) {
     pass('validate-portals accepts a minimal valid portals file');
@@ -1118,6 +1140,13 @@ tracked_companies:
     pass('validate-portals rejects empty content_filter keywords');
   } else {
     fail('validate-portals should reject empty content_filter keywords');
+  }
+
+  const parserBoardResult = run(NODE, ['validate-portals.mjs', '--file', parserBoardPath]);
+  if (parserBoardResult !== null && parserBoardResult.includes('0 errors')) {
+    pass('validate-portals accepts local-parser job_boards entries');
+  } else {
+    fail('validate-portals should accept local-parser job_boards entries');
   }
 
   rmSync(tmp, { recursive: true, force: true });
@@ -1727,7 +1756,92 @@ try {
     shouldDedupScanHistoryRow,
     formatPipelineOffer,
     formatScanHistoryRow,
+    extractProfileScanDefaults,
+    expandProfileTitleKeywords,
+    hydrateProfileBoard,
+    mergeProfileTitleFilter,
   } = await import(pathToFileURL(join(ROOT, 'scan.mjs')).href);
+
+  const profileDefaults = extractProfileScanDefaults({
+    target_roles: { primary: ['Data Engineer', 'Analytics Engineer'] },
+    location: { country: 'Germany', city: 'Berlin' },
+    candidate: { location: 'Berlin, Germany' },
+  });
+  const inheritedIndeed = hydrateProfileBoard({
+    name: 'Indeed Jobs',
+    inherit_profile: true,
+    indeed: { days: 10 },
+  }, profileDefaults);
+  const explicitLinkedIn = hydrateProfileBoard({
+    name: 'LinkedIn Jobs',
+    inherit_profile: true,
+    linkedin: { keywords: ['Platform Engineer'], location: 'Netherlands' },
+  }, profileDefaults);
+  const enabledStepStone = hydrateProfileBoard({
+    name: 'StepStone Jobs',
+    inherit_profile: true,
+    profile_countries: ['Germany'],
+    enabled: true,
+    stepstone: { days: 10 },
+  }, profileDefaults);
+  const disabledStepStone = hydrateProfileBoard({
+    name: 'StepStone Jobs',
+    inherit_profile: true,
+    profile_countries: ['Germany'],
+    enabled: true,
+    stepstone: { days: 10 },
+  }, { ...profileDefaults, country: 'France' });
+  const expandedRoleKeywords = expandProfileTitleKeywords(['Senior Backend Engineer', 'Product Developer']);
+  const profileTitleFilter = mergeProfileTitleFilter(
+    { positive: ['AI Engineer'], negative: ['Junior'] },
+    profileDefaults,
+    { enabled: true, use_target_roles: true, title_filter_mode: 'replace' },
+  );
+
+  if (
+    profileDefaults.location === 'Germany' &&
+    profileDefaults.indeedHost === 'de.indeed.com' &&
+    inheritedIndeed.indeed.location === 'Germany' &&
+    inheritedIndeed.indeed.host === 'de.indeed.com' &&
+    inheritedIndeed.indeed.keywords.join('|') === 'Data Engineer|Analytics Engineer'
+  ) {
+    pass('profile-driven job boards inherit target roles, country, and Indeed host');
+  } else {
+    fail(`profile-driven board inheritance failed: ${JSON.stringify({ profileDefaults, inheritedIndeed })}`);
+  }
+
+  if (enabledStepStone.enabled === true && disabledStepStone.enabled === false) {
+    pass('profile-country board gate enables StepStone only for German profiles');
+  } else {
+    fail(`profile-country board gate failed: ${JSON.stringify({ enabledStepStone, disabledStepStone })}`);
+  }
+
+  if (
+    expandedRoleKeywords.join('|') ===
+    'Senior Backend Engineer|Senior Backend Developer|Backend Engineer|Backend Developer|Product Developer|Product Engineer'
+  ) {
+    pass('profile title keywords include bounded seniority and engineer/developer variants');
+  } else {
+    fail(`profile title keyword expansion failed: ${JSON.stringify(expandedRoleKeywords)}`);
+  }
+
+  if (
+    explicitLinkedIn.linkedin.location === 'Netherlands' &&
+    explicitLinkedIn.linkedin.keywords.join('|') === 'Platform Engineer'
+  ) {
+    pass('explicit job-board values override inherited profile defaults');
+  } else {
+    fail('explicit job-board values should override profile defaults');
+  }
+
+  if (
+    profileTitleFilter.positive.join('|') === 'Data Engineer|Data Developer|Analytics Engineer|Analytics Developer' &&
+    profileTitleFilter.negative.join('|') === 'Junior'
+  ) {
+    pass('profile title-filter replacement uses target roles and preserves exclusions');
+  } else {
+    fail(`profile title-filter replacement failed: ${JSON.stringify(profileTitleFilter)}`);
+  }
 
   const filter = buildLocationFilter({
     always_allow: ['belgium', 'brussels'],
@@ -1891,12 +2005,14 @@ try {
   const historyRow = formatScanHistoryRow(hostileOffer, '2026-06-18');
   const historyColumns = historyRow.split('\t');
   if (
-    historyColumns.length === 7 &&
+    historyColumns.length === 8 &&
     !historyColumns.some(col => /[\r\n\t]/.test(col)) &&
     historyColumns[0] === 'https://jobs.example.com/123|evil' &&
-    historyColumns[3].includes('- [ ] https://evil.example/job') &&
+    historyColumns[2] === '' &&
     historyColumns[4] === "'=ACME\\Corp | R&D" &&
-    historyColumns[6] === "'@Remote EU"
+    historyColumns[5].includes('- [ ] https://evil.example/job') &&
+    historyColumns[6] === "'@Remote EU" &&
+    historyColumns[7] === 'added'
   ) {
     pass('scan-history writer preserves row shape and neutralizes spreadsheet formulas');
   } else {

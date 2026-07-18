@@ -25,14 +25,22 @@ The spawned subagent is a **single-pass worker**: it runs the scan with the pars
 Read `portals.yml` which contains:
 - `search_queries`: List of WebSearch queries with `site:` filters per portal (broad discovery)
 - `tracked_companies`: Specific companies with `careers_url` for direct navigation
+- `job_boards`: Multi-employer sources, including repo-local parser-backed boards
 - `tracked_companies[].parser`: Optional local parser for SSR pages or stable HTML
 - `title_filter`: Keywords (positive/negative/seniority_boost) for filtering job titles
+- `profile_scan`: Optional inheritance of target roles from `config/profile.yml`
+
+When a `job_boards` entry has `inherit_profile: true`, `scan.mjs` supplies missing
+keywords from `target_roles.primary` and missing location from `location.country`.
+Explicit board values always win. Indeed's host is inferred from the profile country.
+If the entry defines `profile_countries`, it runs only when `location.country`
+matches one of those countries; otherwise it is disabled for that scan.
 
 ## Discovery Strategy (4 Levels)
 
 ### Level 0 — Local Parser (CHEAPEST)
 
-**For each company in `tracked_companies` with a configured `parser`:** execute the local parser defined in `portals.yml`. This level is ideal when the careers page uses SSR or stable HTML and there is already a local JavaScript, Python, or other runtime script that extracts jobs without agent assistance.
+**For each company in `tracked_companies` or board in `job_boards` with a configured `parser`:** execute the local parser defined in `portals.yml`. This level is ideal when the careers page uses SSR or stable HTML and there is already a local JavaScript, Python, or other runtime script that extracts jobs without agent assistance.
 
 Recommended Contract:
 
@@ -156,6 +164,9 @@ Levels are additive — they are executed in order, and results are merged and d
 ## Workflow
 
 1. **Read Configuration**: `portals.yml`
+   - If `profile_scan.enabled: true`, also read `config/profile.yml`.
+   - For `inherit_profile: true` boards, fill missing keywords from `target_roles.primary` and location from `location.country`.
+   - If `title_filter_mode: replace`, use `target_roles.primary` as the positive title allowlist while preserving `title_filter.negative` exclusions from `portals.yml`.
 2. **Read History**: `data/scan-history.tsv` → already seen URLs
 3. **Read Dedup Sources**: `data/applications.md` + `data/pipeline.md`
 
@@ -216,7 +227,7 @@ Levels are additive — they are executed in order, and results are merged and d
    - Empty `allow` → passes (already cleared block).
    - Non-empty `allow` → must match at least one keyword.
    - All matches are case-insensitive substring matches.
-   - The location is persisted as the 7th column in `scan-history.tsv` for later auditing.
+   - The job's posted date is persisted as the 3rd column and the location as the 7th column in `scan-history.tsv` for later auditing.
 
 7. **Deduplicate** against 3 sources:
    - `scan-history.tsv` → exact URL already seen
@@ -243,7 +254,7 @@ Levels are additive — they are executed in order, and results are merged and d
 
 8. **For each new verified offer that passes filters**:
    a. Add to the `pipeline.md` "Pending" section: `- [ ] {url} | {company} | {title}`
-   b. Record in `scan-history.tsv`: `{url}\t{date}\t{query_name}\t{title}\t{company}\tadded`
+   b. Record in `scan-history.tsv`: `{url}\t{seen_on}\t{posted_on}\t{source}\t{company}\t{title}\t{location}\tadded`
 
 9. **Offers filtered by title**: record in `scan-history.tsv` with status `skipped_title`.
 10. **Duplicate offers**: record with status `skipped_dup`.
@@ -271,11 +282,13 @@ If a non-publicly accessible URL is found:
 `data/scan-history.tsv` tracks ALL seen URLs:
 
 ```tsv
-url	first_seen	portal	title	company	status
-https://...	2026-02-10	Ashby — AI PM	PM AI	Acme	added
+url	seen_on	posted_on	source	company	title	location	status
+https://...	2026-02-10	2026-02-09	ashby	Acme	AI Product Manager	Remote	added
 ```
 
 ## Output Summary
+
+Canonical schema note: `scan-history.tsv` now uses `url	seen_on	posted_on	source	company	title	location	status`.
 
 ```text
 Portal Scan — {YYYY-MM-DD}

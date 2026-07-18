@@ -17,9 +17,11 @@ are shared helpers and are not loaded as providers.
 | Greenhouse | API | Handles explicit `api:` URLs and auto-detects public Greenhouse board URLs for the boards API. |
 | IBM Careers | API | Posts to IBM's public careers search API and supports optional IBM facet filters in the portal entry. |
 | Jobstreet / SEEK | API | Uses the public SEEK chalice-search JSON API for Jobstreet and SEEK sites. Configure explicitly with `provider: jobstreet`. |
+| LinkedIn Jobs | Parser | Best configured through `provider: local-parser` plus a repo-local Playwright script. The public guest jobs SERP exposes deterministic cards and posting dates. |
 | Landing.jobs | API | Reads the board-wide `https://landing.jobs/api/v1/jobs` JSON feed (tech, Europe). Configure with `provider: landingjobs`; company is derived from the posting URL slug. |
 | Lever | API | Auto-detects `https://jobs.lever.co/<slug>` boards and uses Lever's public postings endpoint. |
 | Local parser | Parser | Runs an in-repo parser command from `portals.yml`. Use this for stable SSR or HTML pages that need a custom extractor. |
+| Indeed | Parser | Works well through `provider: local-parser` plus a deterministic HTML parser that builds exact search URLs and applies local recency filtering. |
 | Personio | RSS | Auto-detects `<slug>.jobs.personio.de` or `.com` hosts and parses the public XML jobs feed. |
 | Pinpoint | API | Auto-detects `<slug>.pinpointhq.com` boards and reads the public zero-auth `/postings.json` per-tenant feed. |
 | Recruitee | API | Auto-detects `<slug>.recruitee.com` boards and uses the public per-tenant offers API. |
@@ -28,7 +30,9 @@ are shared helpers and are not loaded as providers.
 | Rippling | API | Auto-detects `https://ats.rippling.com/<slug>/jobs` careers pages and reads the public zero-auth board API (`api.rippling.com/platform/api/ats/v1/board/<slug>/jobs`). |
 | SmartRecruiters | API | Auto-detects SmartRecruiters careers URLs or uses `provider: smartrecruiters` for branded custom domains. |
 | SolidJobs | API | Auto-detects `https://solid.jobs/public-api/offers/<division>` and reads the public offers API. |
+| StepStone | Parser | Germany-only (`stepstone.de`). The default profile-driven entry runs only when `location.country: Germany`; its Python parser requires `requests` and `beautifulsoup4`. |
 | The Hub | API | Reads the board-wide `https://thehub.io/api/jobs` JSON feed (Nordic/EU startups). Configure with `provider: thehub`; paginates `?page=N` up to `max_pages` (default 3), then scanner filters apply. |
+| Glassdoor | Parser | Best-effort local-parser integration only. Anti-bot challenges can block unattended runs, so configure it to fail open and rely on the other sources when challenged. |
 | We Work Remotely | RSS | Reads the public `https://weworkremotely.com/remote-jobs.rss` feed and parses it in-process. |
 | Workable | Parser | Auto-detects `https://apply.workable.com/<slug>` and parses Workable's public markdown jobs feed. |
 | Workday | API | Auto-detects Workday `myworkdayjobs.com` careers URLs and posts to the public CXS jobs endpoint. |

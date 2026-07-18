@@ -317,7 +317,43 @@ func enrichFromScanHistory(careerOpsPath string, apps []model.CareerApplication)
 	scanPath := filepath.Join(careerOpsPath, "scan-history.tsv")
 	scanData, err := os.ReadFile(scanPath)
 	if err != nil {
-		return
+		scanPath = filepath.Join(careerOpsPath, "data", "scan-history.tsv")
+		scanData, err = os.ReadFile(scanPath)
+		if err != nil {
+			return
+		}
+	}
+
+	canonical := func(name string) string {
+		s := strings.ToLower(strings.TrimSpace(name))
+		switch s {
+		case "first_seen":
+			return "seen_on"
+		case "portal":
+			return "source"
+		default:
+			return s
+		}
+	}
+
+	buildIndex := func(fields []string) map[string]int {
+		idx := map[string]int{}
+		for i, field := range fields {
+			key := canonical(field)
+			if key != "" {
+				idx[key] = i
+			}
+		}
+		if _, ok := idx["url"]; !ok {
+			return nil
+		}
+		if _, ok := idx["company"]; !ok {
+			return nil
+		}
+		if _, ok := idx["title"]; !ok {
+			return nil
+		}
+		return idx
 	}
 
 	// Build company -> URL index from scan-history
@@ -327,14 +363,37 @@ func enrichFromScanHistory(careerOpsPath string, apps []model.CareerApplication)
 		title   string
 	}
 	byCompany := make(map[string][]scanEntry)
-	for _, line := range strings.Split(string(scanData), "\n") {
+	lines := strings.Split(string(scanData), "\n")
+	var headerIdx map[string]int
+	if len(lines) > 0 {
+		headerIdx = buildIndex(strings.Split(lines[0], "\t"))
+	}
+	for i, line := range lines {
 		fields := strings.Split(line, "\t")
-		if len(fields) < 5 || fields[0] == "url" {
+		if len(fields) < 5 {
 			continue
 		}
-		url := fields[0]
-		company := fields[4]
-		title := fields[3]
+		if i == 0 && headerIdx != nil {
+			continue
+		}
+		url := ""
+		company := ""
+		title := ""
+		if headerIdx != nil {
+			urlIdx := headerIdx["url"]
+			companyIdx := headerIdx["company"]
+			titleIdx := headerIdx["title"]
+			if urlIdx >= len(fields) || companyIdx >= len(fields) || titleIdx >= len(fields) {
+				continue
+			}
+			url = fields[urlIdx]
+			company = fields[companyIdx]
+			title = fields[titleIdx]
+		} else {
+			url = fields[0]
+			company = fields[4]
+			title = fields[3]
+		}
 		if url == "" || !strings.HasPrefix(url, "http") {
 			continue
 		}

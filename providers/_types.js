@@ -25,11 +25,12 @@
  *                               providers omit it. Consumed by scan.mjs's
  *                               content_filter; an empty/absent value always
  *                               passes the filter.
+ * @property {{min?: number, max?: number, currency?: string}} [salary]
+ *                               Optional normalized compensation range.
  * @property {number} [postedAt] Epoch ms when the posting was published.
  *                               Omitted when the source doesn't expose a
- *                               usable date. scan.mjs ignores it; consumers
- *                               like scan-ats-full.mjs use it for recency
- *                               filtering.
+ *                               usable date. scan.mjs persists it in scan
+ *                               history; other consumers use it for recency.
  * @property {number} [trustScore] 0-100 trust score from _trust-validator.mjs.
  * @property {string[]} [trustFlags] Flags raised by trust validation (e.g.
  *                                   'invalid_url', 'suspicious_domain').

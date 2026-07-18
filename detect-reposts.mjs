@@ -26,6 +26,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 import { roleFuzzyMatch } from './role-matcher.mjs';
+import { parseScanHistoryRows } from './scan-history.mjs';
 
 const CAREER_OPS = dirname(fileURLToPath(import.meta.url));
 const SCAN_HISTORY_PATH = join(CAREER_OPS, 'data/scan-history.tsv');
@@ -54,30 +55,23 @@ function daysBetween(d1, d2) {
 }
 
 // --- Parse scan-history.tsv ---
-// Format: url, first_seen, portal, title, company, status, location
+// Canonical format: url, seen_on, posted_on, source, company, title, location, status
+// Legacy headers/orderings are still accepted for backward compatibility.
 export function parseScanHistory(content) {
-  const lines = content.split('\n').filter(line => line.trim());
-  if (lines.length === 0) return [];
   const rows = [];
-  // Only skip the header when it actually looks like one — older
-  // headerless scan-history.tsv files and the seed file in the repo
-  // don't have a header row, and slice(1) would silently lose row 0.
-  const hasHeader = /^\s*url\s*\t/i.test(lines[0]);
-  for (const line of lines.slice(hasHeader ? 1 : 0)) {
-    const cols = line.split('\t');
-    if (cols.length < 5) continue;
-    const [url, firstSeen, portal = '', title = '', company = '', status = 'added', location = ''] = cols;
-    const date = parseDate(firstSeen);
-    if (!url || !date) continue;
+  for (const row of parseScanHistoryRows(content)) {
+    const date = parseDate(row.seen_on);
+    if (!row.url || !date) continue;
     rows.push({
-      url: url.trim(),
+      url: row.url.trim(),
       date,
-      dateStr: firstSeen.trim(),
-      portal: portal.trim(),
-      title: title.trim(),
-      company: company.trim(),
-      status: (status || 'added').trim(),
-      location: (location || '').trim(),
+      dateStr: row.seen_on.trim(),
+      portal: row.source.trim(),
+      title: row.title.trim(),
+      company: row.company.trim(),
+      status: (row.status || 'added').trim(),
+      postedOn: (row.posted_on || '').trim(),
+      location: (row.location || '').trim(),
     });
   }
   return rows;

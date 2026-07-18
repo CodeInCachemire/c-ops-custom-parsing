@@ -6,6 +6,8 @@ Local parsers let `scan.mjs` read SSR or static career pages without asking an a
 
 Use `scan_method: local_parser` when a company career page has stable HTML, a documented endpoint, or another deterministic source that is easier to parse locally than with Playwright. The parser can be written in JavaScript, Python, shell, Go, or any executable available on the user's machine. `career-ops` does not bundle company-specific parser scripts; users bring their own script and point `portals.yml` at it.
 
+Local parsers also work for `job_boards` entries when a multi-employer board exposes stable public HTML but not a durable public JSON feed.
+
 ## Portal Configuration
 
 Most local parsers are company-specific: the script already knows the source URL, selectors, endpoint quirks, pagination, and normalization rules. In that common case, the scanner only needs to know which command to run:
@@ -21,7 +23,7 @@ Most local parsers are company-specific: the script already knows the source URL
   enabled: true
 ```
 
-`args` are optional. Use them in whatever way helps the parser author: to make one script reusable across multiple companies, pass `{careers_url}` or `{company}`, enable a debug flag, store a JSON snapshot, or control any other script-specific behavior. `scan.mjs` executes the parser without shell interpolation and expands `{careers_url}` and `{company}` in parser arguments before execution.
+`args` are optional. Use them in whatever way helps the parser author: to make one script reusable across multiple companies or job boards, pass `{careers_url}`, `{company}`, or `{entry_json}`, enable a debug flag, store a JSON snapshot, or control any other script-specific behavior. `scan.mjs` executes the parser without shell interpolation and expands those placeholders in parser arguments before execution.
 
 ## Token savings
 
@@ -58,6 +60,13 @@ The parser must print one of these JSON shapes to stdout:
 ```
 
 `title` and `url` are required. `company` is optional; when omitted, the scanner uses the `tracked_companies` entry name. Relative URLs are resolved against `careers_url`.
+
+Optional fields the scanner preserves when present:
+
+- `description`
+- `salary` as `{ "min": 120000, "max": 150000, "currency": "EUR" }`
+- `postedAt` as epoch milliseconds or a parseable date string
+- `source`
 
 ## Artifact Storage
 

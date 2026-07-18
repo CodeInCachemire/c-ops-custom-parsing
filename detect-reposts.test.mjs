@@ -569,9 +569,9 @@ console.log('\n--- 9. TSV parsing ---');
 // by creating temp files. We test the full pipeline: TSV -> parseScanHistory -> detectReposts.
 
 function makeTsv(rows) {
-  const header = 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation';
+  const header = 'url\tseen_on\tposted_on\tsource\tcompany\ttitle\tlocation\tstatus';
   const lines = rows.map(r =>
-    [r.url, r.dateStr, r.portal || 'greenhouse', r.title, r.company, r.status || 'added', r.location || ''].join('\t')
+    [r.url, r.dateStr, r.postedOn || '', r.portal || 'greenhouse', r.company, r.title, r.location || '', r.status || 'added'].join('\t')
   );
   return [header, ...lines].join('\n');
 }
@@ -604,11 +604,11 @@ try {
 
   // TSV with empty lines between rows
   const tsvWithBlanks = [
-    'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation',
+    'url\tseen_on\tposted_on\tsource\tcompany\ttitle\tlocation\tstatus',
     '',
-    'https://a.com/1\t2026-01-01\tgreenhouse\tBackend Engineer Platform\tAcme\tadded\tRemote',
+    'https://a.com/1\t2026-01-01\t\tgreenhouse\tAcme\tBackend Engineer Platform\tRemote\tadded',
     '',
-    'https://a.com/2\t2026-02-01\tgreenhouse\tBackend Engineer Platform\tAcme\tadded\tRemote',
+    'https://a.com/2\t2026-02-01\t\tgreenhouse\tAcme\tBackend Engineer Platform\tRemote\tadded',
     '',
   ].join('\n');
   const blankParsed = parseScanHistory(tsvWithBlanks);
@@ -617,9 +617,9 @@ try {
 
   // TSV with fewer than 5 columns (malformed)
   const tsvShort = [
-    'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation',
+    'url\tseen_on\tposted_on\tsource\tcompany\ttitle\tlocation\tstatus',
     'https://a.com/1\t2026-01-01\tgreenhouse',
-    'https://a.com/2\t2026-02-01\tgreenhouse\tBackend Engineer Platform\tAcme\tadded\tRemote',
+    'https://a.com/2\t2026-02-01\t\tgreenhouse\tAcme\tBackend Engineer Platform\tRemote\tadded',
   ].join('\n');
   const shortParsed = parseScanHistory(tsvShort);
   eq('TSV with short row: only valid row parsed', shortParsed.length, 1);
@@ -627,9 +627,9 @@ try {
 
   // TSV with calendar-invalid date
   const tsvBadDate = [
-    'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation',
-    'https://a.com/1\t2026-02-31\tgreenhouse\tBackend Engineer Platform\tAcme\tadded\tRemote',
-    'https://a.com/2\t2026-02-01\tgreenhouse\tBackend Engineer Platform\tAcme\tadded\tRemote',
+    'url\tseen_on\tposted_on\tsource\tcompany\ttitle\tlocation\tstatus',
+    'https://a.com/1\t2026-02-31\t\tgreenhouse\tAcme\tBackend Engineer Platform\tRemote\tadded',
+    'https://a.com/2\t2026-02-01\t\tgreenhouse\tAcme\tBackend Engineer Platform\tRemote\tadded',
   ].join('\n');
   const badDateParsed = parseScanHistory(tsvBadDate);
   eq('TSV with calendar-invalid date: only valid row parsed', badDateParsed.length, 1);
@@ -637,14 +637,21 @@ try {
 
   // TSV with empty company field
   const tsvEmptyCompany = [
-    'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation',
-    'https://a.com/1\t2026-01-01\tgreenhouse\tBackend Engineer Platform\t\tadded\tRemote',
-    'https://b.com/2\t2026-02-01\tgreenhouse\tBackend Engineer Platform\t\tadded\tRemote',
+    'url\tseen_on\tposted_on\tsource\tcompany\ttitle\tlocation\tstatus',
+    'https://a.com/1\t2026-01-01\t\tgreenhouse\t\tBackend Engineer Platform\tRemote\tadded',
+    'https://b.com/2\t2026-02-01\t\tgreenhouse\t\tBackend Engineer Platform\tRemote\tadded',
   ].join('\n');
   const emptyCoParsed = parseScanHistory(tsvEmptyCompany);
   // parseScanHistory produces rows with empty company, but detectReposts filters them out
   eq('TSV with empty company: rows parsed (2)', emptyCoParsed.length, 2);
   eq('TSV with empty company: no clusters (filtered by detectReposts)', detectReposts(emptyCoParsed, 90).length, 0);
+
+  const legacyHeaderParsed = parseScanHistory([
+    'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation',
+    'https://a.com/1\t2026-01-01\tgreenhouse\tBackend Engineer Platform\tAcme\tadded\tRemote',
+    'https://a.com/2\t2026-02-01\tgreenhouse\tBackend Engineer Platform\tAcme\tadded\tRemote',
+  ].join('\n'));
+  eq('Legacy header/order TSV: still parsed successfully', legacyHeaderParsed.length, 2);
 
   // Headerless 5-column TSV parsing test (Older scan-history and seed file backward compat)
   const headerlessTsv = [

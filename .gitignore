@@ -62,6 +62,10 @@ plugins.lock
 .resolved-prompt-*
 node_modules/
 bun.lock
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 # Report-number reservation sentinels (ephemeral, created by reserve-report-num.mjs)
 reports/*-RESERVED.md
 

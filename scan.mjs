@@ -38,6 +38,7 @@ import yaml from 'js-yaml';
 import { makeHttpCtx } from './providers/_http.mjs';
 import { buildTrustValidator } from './providers/_trust-validator.mjs';
 import { mergeProviderPlugins } from './plugins/_engine.mjs';
+import { ensureScanHistoryFile, SCAN_HISTORY_HEADER } from './scan-history.mjs';
 
 const parseYaml = yaml.load;
 
@@ -54,6 +55,136 @@ const PROVIDERS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
 mkdirSync('data', { recursive: true });
 
 const CONCURRENCY = 10;
+
+const INDEED_HOST_BY_COUNTRY = new Map([
+  ['australia', 'au.indeed.com'],
+  ['austria', 'at.indeed.com'],
+  ['belgium', 'be.indeed.com'],
+  ['brazil', 'br.indeed.com'],
+  ['canada', 'ca.indeed.com'],
+  ['france', 'fr.indeed.com'],
+  ['germany', 'de.indeed.com'],
+  ['india', 'in.indeed.com'],
+  ['ireland', 'ie.indeed.com'],
+  ['italy', 'it.indeed.com'],
+  ['japan', 'jp.indeed.com'],
+  ['mexico', 'mx.indeed.com'],
+  ['netherlands', 'nl.indeed.com'],
+  ['poland', 'pl.indeed.com'],
+  ['singapore', 'sg.indeed.com'],
+  ['spain', 'es.indeed.com'],
+  ['switzerland', 'ch.indeed.com'],
+  ['united kingdom', 'uk.indeed.com'],
+  ['united states', 'www.indeed.com'],
+]);
+
+function cleanProfileValues(value) {
+  const values = Array.isArray(value) ? value : [];
+  return [...new Set(values
+    .filter(item => typeof item === 'string')
+    .map(item => item.trim())
+    .filter(Boolean))];
+}
+
+function isTemplatePlaceholder(value) {
+  return typeof value === 'string' && /^YOUR\s+/i.test(value.trim());
+}
+
+const SENIORITY_PREFIX_RE = /^(?:(?:senior|sr\.?|junior|jr\.?|lead|staff|principal)\s+)+/i;
+
+export function expandProfileTitleKeywords(keywords) {
+  const variants = [];
+  const add = (value) => {
+    const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+    if (normalized && !variants.some(item => item.toLowerCase() === normalized.toLowerCase())) {
+      variants.push(normalized);
+    }
+  };
+
+  const addRoleNounVariant = (value) => {
+    if (/\bengineer$/i.test(value)) add(value.replace(/engineer$/i, 'Developer'));
+    if (/\bdeveloper$/i.test(value)) add(value.replace(/developer$/i, 'Engineer'));
+  };
+
+  for (const keyword of cleanProfileValues(keywords)) {
+    add(keyword);
+    addRoleNounVariant(keyword);
+
+    const withoutSeniority = keyword.replace(SENIORITY_PREFIX_RE, '').trim();
+    if (withoutSeniority && withoutSeniority !== keyword) {
+      add(withoutSeniority);
+      addRoleNounVariant(withoutSeniority);
+    }
+  }
+
+  return variants;
+}
+
+export function extractProfileScanDefaults(profile = {}) {
+  const keywords = cleanProfileValues(profile?.target_roles?.primary);
+  const country = typeof profile?.location?.country === 'string'
+    ? profile.location.country.trim()
+    : '';
+  const candidateLocation = typeof profile?.candidate?.location === 'string'
+    ? profile.candidate.location.trim()
+    : '';
+  const city = typeof profile?.location?.city === 'string'
+    ? profile.location.city.trim()
+    : '';
+  const location = country || candidateLocation || city;
+  const indeedHost = INDEED_HOST_BY_COUNTRY.get(country.toLowerCase()) || 'www.indeed.com';
+
+  return { keywords, location, country, indeedHost };
+}
+
+export function hydrateProfileBoard(entry, defaults) {
+  if (!entry || typeof entry !== 'object' || entry.inherit_profile !== true) return entry;
+
+  const allowedCountries = cleanProfileValues(entry.profile_countries).map(value => value.toLowerCase());
+  const profileCountry = String(defaults?.country || '').trim().toLowerCase();
+  if (allowedCountries.length > 0 && (!profileCountry || !allowedCountries.includes(profileCountry))) {
+    return { ...entry, enabled: false };
+  }
+
+  const configKey = ['linkedin', 'indeed', 'glassdoor', 'stepstone']
+    .find(key => entry[key] && typeof entry[key] === 'object');
+  if (!configKey) return entry;
+
+  const boardConfig = { ...entry[configKey] };
+  const configuredKeywords = cleanProfileValues(boardConfig.keywords)
+    .filter(keyword => !isTemplatePlaceholder(keyword));
+  if (configuredKeywords.length === 0 && defaults.keywords.length > 0) {
+    boardConfig.keywords = [...defaults.keywords];
+  }
+  if ((!boardConfig.location || isTemplatePlaceholder(boardConfig.location)) && defaults.location) {
+    boardConfig.location = defaults.location;
+  }
+  if (configKey === 'indeed' && (!boardConfig.host || isTemplatePlaceholder(boardConfig.host))) {
+    boardConfig.host = defaults.indeedHost;
+  }
+
+  return { ...entry, [configKey]: boardConfig };
+}
+
+export function mergeProfileTitleFilter(titleFilter, defaults, profileScan = {}) {
+  if (profileScan.enabled !== true || profileScan.use_target_roles !== true) return titleFilter;
+  const configured = cleanProfileValues(titleFilter?.positive);
+  const profileKeywords = expandProfileTitleKeywords(defaults.keywords);
+  const replace = profileScan.title_filter_mode === 'replace';
+  const positive = replace
+    ? profileKeywords
+    : [...new Set([...profileKeywords, ...configured])];
+  return { ...(titleFilter || {}), positive };
+}
+
+function loadProfileConfig(profilePath = PROFILE_PATH) {
+  if (!existsSync(profilePath)) return {};
+  try {
+    return yaml.load(readFileSync(profilePath, 'utf-8')) || {};
+  } catch {
+    return {};
+  }
+}
 
 // ── Provider loading ────────────────────────────────────────────────
 
@@ -93,6 +224,7 @@ async function loadProviders(dir) {
 // 3. Otherwise each provider's detect() runs in load order; first hit wins.
 function resolveProvider(entry, providers, { skipIds = [] } = {}) {
   if (entry.provider) {
+    if (skipIds.includes(entry.provider)) return null;
     const p = providers.get(entry.provider);
     if (!p) return { error: `unknown provider: ${entry.provider}` };
     return { provider: p };
@@ -528,9 +660,11 @@ export function loadSeenUrls(policy = {}) {
 
   // scan-history.tsv
   if (existsSync(SCAN_HISTORY_PATH)) {
-    const lines = readFileSync(SCAN_HISTORY_PATH, 'utf-8').split('\n');
-    for (const line of lines.slice(1)) { // skip header
-      const [url, firstSeen, , , , status = 'added'] = line.split('\t');
+    const rows = ensureScanHistoryFile(SCAN_HISTORY_PATH);
+    for (const row of rows) {
+      const url = row.url;
+      const firstSeen = row.seen_on;
+      const status = row.status || 'added';
       if (!url) continue;
       if (shouldDedupScanHistoryRow({ firstSeen, status }, policy)) seen.add(url);
       else recheckEligible++;
@@ -608,6 +742,42 @@ export function sanitizeTsvField(value) {
   return /^[=+\-@]/.test(normalized) ? `'${normalized}` : normalized;
 }
 
+function formatPostedOn(value) {
+  if (value == null || value === '') return '';
+
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.toISOString().slice(0, 10) : '';
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) return formatPostedOn(numeric);
+    const parsed = Date.parse(trimmed);
+    return Number.isFinite(parsed) ? new Date(parsed).toISOString().slice(0, 10) : '';
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const epochMs = Math.abs(value) < 1e12 ? value * 1000 : value;
+    const parsed = new Date(epochMs);
+    return Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : '';
+  }
+
+  return '';
+}
+
+function getOfferPostedOn(offer) {
+  return formatPostedOn(
+    offer?.postedAt
+    ?? offer?.posted_on
+    ?? offer?.datePosted
+    ?? offer?.publishedAt
+    ?? offer?.published_date
+  );
+}
+
 // Format an offer's parsed compensation (the annualized {min,max,currency} that
 // providers like Ashby attach as `offer.salary`) into a compact, sanitized cell
 // such as `120000-160000 USD`. Returns '' when there is no usable salary data.
@@ -645,11 +815,12 @@ export function formatScanHistoryRow(offer, date, status = 'added') {
   return [
     normalizeScanUrl(offer.url),
     date,
+    getOfferPostedOn(offer),
     offer.source,
-    offer.title,
     offer.company,
-    status,
+    offer.title,
     offer.location || '',
+    status,
   ].map(sanitizeTsvField).join('\t');
 }
 
@@ -705,14 +876,8 @@ export function appendToPipeline(offers) {
 }
 
 export function appendToScanHistory(offers, date, status = 'added') {
-  // Ensure file + header exist. Location appended as 7th column for non-breaking
-  // backward compat — older scan-history.tsv files with 6 columns still parse fine
-  // since loadSeenUrls only reads column 0. `status` is parameterized so callers
-  // can record verify outcomes (`skipped_expired`, etc.) without the legacy
-  // `(expired)` suffix in `source`.
-  if (!existsSync(SCAN_HISTORY_PATH)) {
-    writeFileSync(SCAN_HISTORY_PATH, 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\n', 'utf-8');
-  }
+  if (!existsSync(SCAN_HISTORY_PATH)) writeFileSync(SCAN_HISTORY_PATH, SCAN_HISTORY_HEADER, 'utf-8');
+  else ensureScanHistoryFile(SCAN_HISTORY_PATH);
 
   const lines = offers.map(o => formatScanHistoryRow(o, date, status)).join('\n') + '\n';
 
@@ -904,9 +1069,17 @@ async function main() {
     process.exit(1);
   }
   const config = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+  const profileConfig = loadProfileConfig();
+  const profileDefaults = extractProfileScanDefaults(profileConfig);
+  const profileScan = config.profile_scan && typeof config.profile_scan === 'object'
+    ? config.profile_scan
+    : {};
   const companies = Array.isArray(config.tracked_companies) ? config.tracked_companies : [];
-  const boards = Array.isArray(config.job_boards) ? config.job_boards : [];
-  const titleFilter = buildTitleFilter(config.title_filter);
+  const boards = Array.isArray(config.job_boards)
+    ? config.job_boards.map(entry => hydrateProfileBoard(entry, profileDefaults))
+    : [];
+  const effectiveTitleFilter = mergeProfileTitleFilter(config.title_filter, profileDefaults, profileScan);
+  const titleFilter = buildTitleFilter(effectiveTitleFilter);
   const locationFilter = buildLocationFilter(config.location_filter);
   const salaryFilter = buildSalaryFilter(config.salary_filter);
   const trustValidator = buildTrustValidator(config.trust_filter);
@@ -994,7 +1167,9 @@ async function main() {
   const tasks = targets.map(company => async () => {
     let provider = company._provider;
     const ctx = makeHttpCtx();
-    let sourceName = provider.id === 'local-parser' ? 'local-parser' : `${provider.id}-api`;
+    let sourceName = provider.id === 'local-parser'
+      ? (typeof company.source === 'string' && company.source.trim() ? company.source.trim() : 'local-parser')
+      : `${provider.id}-api`;
     try {
       let jobs;
       try {
@@ -1049,10 +1224,11 @@ async function main() {
           continue;
         }
         const cooldownResult = cooldownFilter(job);
+        const offerSource = typeof job.source === 'string' && job.source.trim() ? job.source.trim() : sourceName;
         if (cooldownResult.skip) {
           totalFilteredCooldown++;
           cooldownOffers.push({
-            job: { ...job, source: sourceName },
+            job: { ...job, source: offerSource },
             status: cooldownResult.reason,
           });
           continue;
@@ -1066,7 +1242,7 @@ async function main() {
         const careersUrlDomain = extractCareersUrlDomain(company.careers_url);
         newOffers.push({
           ...job,
-          source: sourceName,
+          source: offerSource,
           tracked: Boolean(careersUrlDomain),
           careersUrlDomain,
         });

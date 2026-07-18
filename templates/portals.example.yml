@@ -16,10 +16,10 @@
 #
 # HOW TO CUSTOMIZE:
 #   1. Copy this file to portals.yml in the project root
-#   2. Edit title_filter.positive with YOUR target role keywords
+#   2. Fill target_roles.primary and location.country in config/profile.yml
 #   3. Add/remove companies in tracked_companies
 #   4. Adjust search_queries for your preferred job boards
-#   5. Set enabled: false on companies you don't care about
+#   5. Set enabled: false on companies or job boards you don't care about
 
 # -- Scan history recheck policy (optional) --
 # By default, URLs recorded in data/scan-history.tsv are deduped forever.
@@ -30,6 +30,16 @@
 #
 # scan_history:
 #   recheck_after_days: 30
+
+# -- Profile-driven scan defaults --
+# The onboarding profile is enough to run the parser-backed job boards below.
+# `replace` means target_roles.primary becomes the positive title allowlist while
+# title_filter.negative remains active. Explicit board values override inherited
+# profile data.
+profile_scan:
+  enabled: true
+  use_target_roles: true
+  title_filter_mode: replace
 
 # -- Location filter (optional) --
 # Filter scanned jobs by location. Applied AFTER title filter, BEFORE dedup.
@@ -1445,6 +1455,88 @@ tracked_companies:
 # Same title/location filtering and dedup apply.
 
 job_boards:
+
+  # -- Parser-backed global boards --
+  # Enabled by default. `inherit_profile: true` supplies target_roles.primary
+  # and location.country from config/profile.yml on every scan. Explicit values
+  # inside a board block override those defaults. Indeed's country host is
+  # inferred automatically. `profile_countries` limits a board to matching
+  # profile countries, so Germany-only StepStone is skipped everywhere else.
+
+  - name: LinkedIn Jobs
+    provider: local-parser
+    inherit_profile: true
+    parser:
+      command: node
+      script: scripts/parsers/linkedin-job-board.mjs
+      args:
+        - --entry-json
+        - "{entry_json}"
+      timeout_ms: 60000
+    linkedin:
+      days: 10
+      max_scrolls: 3
+      pause_ms: 800
+      keep_unknown_dates: false
+    enabled: true
+
+  - name: Indeed Jobs
+    provider: local-parser
+    inherit_profile: true
+    parser:
+      command: node
+      script: scripts/parsers/indeed-job-board.mjs
+      args:
+        - --entry-json
+        - "{entry_json}"
+      timeout_ms: 90000
+    indeed:
+      days: 10
+      pages: 1
+      job_type: fulltime
+      job_type_encoding: both
+      keep_unknown_dates: false
+    enabled: true
+
+  - name: Glassdoor Jobs
+    provider: local-parser
+    inherit_profile: true
+    parser:
+      command: node
+      script: scripts/parsers/glassdoor-job-board.mjs
+      args:
+        - --entry-json
+        - "{entry_json}"
+      timeout_ms: 60000
+    glassdoor:
+      days: 10
+      job_type: fulltime
+      max_clicks: 3
+      pause_ms: 800
+      keep_unknown_dates: false
+    enabled: true
+
+  - name: StepStone Jobs
+    provider: local-parser
+    inherit_profile: true
+    profile_countries:
+      - Germany
+    parser:
+      command: python
+      script: scripts/parsers/stepstone-job-board.py
+      args:
+        - --entry-json
+        - "{entry_json}"
+      timeout_ms: 90000
+    stepstone:
+      days: 10
+      pages: 1
+      radius: 30
+      fulltime_only: true
+      url_mode: ui
+      sleep_seconds: 1.0
+      keep_unknown_dates: false
+    enabled: true
 
   # ── SolidJobs (Polish market) ──────────────────────────────────────
   # Public API — no auth needed. Division in URL path, campaign=career-ops for tracking.

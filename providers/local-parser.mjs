@@ -45,6 +45,14 @@ function safeCompany(value) {
   return name;
 }
 
+function safeEntryJson(value) {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch (err) {
+    throw new Error(`local-parser: could not serialize entry JSON: ${err.message}`);
+  }
+}
+
 // Only validate a placeholder's value when the arg actually uses it — a fixed
 // `parser.script` must not be rejected because some unrelated `{company}` value
 // has punctuation it never sees.
@@ -52,6 +60,7 @@ function expandParserArg(value, entry) {
   let out = String(value);
   if (out.includes('{careers_url}')) out = out.replaceAll('{careers_url}', safeCareersUrl(entry.careers_url));
   if (out.includes('{company}')) out = out.replaceAll('{company}', safeCompany(entry.name));
+  if (out.includes('{entry_json}')) out = out.replaceAll('{entry_json}', safeEntryJson(entry));
   return out;
 }
 
@@ -137,6 +146,49 @@ function normalizeLocation(value) {
   return String(value).trim();
 }
 
+function normalizeDescription(value) {
+  if (typeof value !== 'string') return '';
+  return value.trim();
+}
+
+function normalizePostedAt(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    if (numeric >= 1e12) return numeric;
+    if (numeric >= 1e9) return numeric * 1000;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return undefined;
+}
+
+function normalizeSalary(value) {
+  if (!value || typeof value !== 'object') return undefined;
+
+  const toNumber = (raw) => {
+    const num = Number(raw);
+    return Number.isFinite(num) ? num : undefined;
+  };
+
+  const min = toNumber(value.min ?? value.low ?? value.from);
+  const max = toNumber(value.max ?? value.high ?? value.to);
+  const currency = typeof value.currency === 'string' ? value.currency.trim() : '';
+
+  if (min === undefined && max === undefined && !currency) return undefined;
+
+  return {
+    ...(min !== undefined ? { min } : {}),
+    ...(max !== undefined ? { max } : {}),
+    ...(currency ? { currency } : {}),
+  };
+}
+
 function normalizeParserJob(job, entry) {
   if (!job || typeof job !== 'object') return null;
 
@@ -147,12 +199,35 @@ function normalizeParserJob(job, entry) {
   );
   if (!title || !url) return null;
 
-  return {
+  const normalized = {
     title,
     url,
     company: String(job.company || entry.name || '').trim(),
     location: normalizeLocation(job.location || job.locations),
+    description: normalizeDescription(job.description || job.snippet || job.description_snippet || job.context),
   };
+
+  const postedAt = normalizePostedAt(job.postedAt ?? job.posted_at);
+  const salary = normalizeSalary(job.salary);
+  const source = typeof job.source === 'string' ? job.source.trim() : '';
+  const employmentType = typeof (job.employmentType ?? job.employment_type) === 'string'
+    ? String(job.employmentType ?? job.employment_type).trim()
+    : '';
+  const remote = typeof job.remote === 'string'
+    ? job.remote.trim()
+    : (typeof job.remote === 'boolean' ? String(job.remote) : '');
+  const salaryRaw = typeof (job.salaryRaw ?? job.salary_raw) === 'string'
+    ? String(job.salaryRaw ?? job.salary_raw).trim()
+    : '';
+
+  if (postedAt !== undefined) normalized.postedAt = postedAt;
+  if (salary) normalized.salary = salary;
+  if (source) normalized.source = source;
+  if (employmentType) normalized.employmentType = employmentType;
+  if (remote) normalized.remote = remote;
+  if (salaryRaw) normalized.salaryRaw = salaryRaw;
+
+  return normalized;
 }
 
 async function runLocalParser(entry) {

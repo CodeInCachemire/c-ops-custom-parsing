@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/santifer/career-ops/dashboard/internal/model"
 )
 
 // Regression for #1180: a status word appearing as a substring of an earlier
@@ -149,5 +151,27 @@ func TestParseApplicationsResolvesTrackerRelativeReportLinks(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(tempDir, app.ReportPath)); err != nil {
 			t.Fatalf("row %d: resolved report path %q does not exist: %v", i, app.ReportPath, err)
 		}
+	}
+}
+
+func TestEnrichFromScanHistoryUsesDataLayoutAndSkipsShortRows(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("failed to create data dir: %v", err)
+	}
+
+	history := "url\tseen_on\tposted_on\tsource\tcompany\ttitle\tlocation\tstatus\n" +
+		"https://broken.example/job\t2026-07-01\t\tscan\tAcme\n" +
+		"https://jobs.example.com/backend\t2026-07-02\t2026-07-01\tlinkedin\tAcme\tBackend Engineer\tRemote\tadded\n"
+	if err := os.WriteFile(filepath.Join(dataDir, "scan-history.tsv"), []byte(history), 0o644); err != nil {
+		t.Fatalf("failed to write scan history: %v", err)
+	}
+
+	apps := []model.CareerApplication{{Company: "Acme", Role: "Backend Engineer"}}
+	enrichFromScanHistory(tempDir, apps)
+
+	if apps[0].JobURL != "https://jobs.example.com/backend" {
+		t.Fatalf("expected URL from canonical data/scan-history.tsv, got %q", apps[0].JobURL)
 	}
 }

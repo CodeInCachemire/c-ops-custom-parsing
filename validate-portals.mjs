@@ -145,6 +145,10 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
   if (companies !== undefined && !Array.isArray(companies)) {
     add(errors, 'tracked_companies', 'tracked_companies must be an array when set');
   }
+  const boards = config.job_boards;
+  if (boards !== undefined && !Array.isArray(boards)) {
+    add(errors, 'job_boards', 'job_boards must be an array when set');
+  }
 
   const seenEnabledNames = new Map();
   if (Array.isArray(companies)) {
@@ -182,6 +186,35 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
     }
   }
 
+  if (Array.isArray(boards)) {
+    for (const [idx, board] of boards.entries()) {
+      const base = `job_boards[${idx}]`;
+      if (!isObject(board)) {
+        add(errors, base, 'job board entry must be an object');
+        continue;
+      }
+      validateKeywordList(board.profile_countries, `${base}.profile_countries`, errors);
+      if (board.enabled === false) continue;
+
+      if (typeof board.name !== 'string' || board.name.trim() === '') {
+        add(errors, `${base}.name`, 'enabled job board must have a non-empty string name');
+      }
+
+      validateUrl(board.careers_url, `${base}.careers_url`, errors);
+      validateUrl(board.api, `${base}.api`, errors);
+
+      if (board.provider !== undefined) {
+        if (typeof board.provider !== 'string' || board.provider.trim() === '') {
+          add(errors, `${base}.provider`, 'provider must be a non-empty string when set');
+        } else if (!providerIds.has(board.provider)) {
+          add(errors, `${base}.provider`, `unknown provider "${board.provider}"`);
+        }
+      }
+
+      validateParser(board.parser, `${base}.parser`, errors);
+    }
+  }
+
   return { errors, warnings };
 }
 
@@ -213,6 +246,22 @@ tracked_companies:
     const result = await validateFile(file);
     if (result.errors.length !== 2) {
       throw new Error(`expected 2 errors, got ${result.errors.length}`);
+    }
+    const boardFile = join(tmp, 'board.yml');
+    writeFileSync(boardFile, `
+title_filter:
+  positive: ["AI"]
+job_boards:
+  - name: "LinkedIn"
+    provider: "local-parser"
+    parser:
+      command: "node"
+      script: "scan.mjs"
+      args: ["--entry-json", "{entry_json}"]
+`, 'utf-8');
+    const boardResult = await validateFile(boardFile);
+    if (boardResult.errors.length !== 0) {
+      throw new Error(`expected 0 board errors, got ${boardResult.errors.length}`);
     }
     console.log('validate-portals self-test OK');
   } finally {
